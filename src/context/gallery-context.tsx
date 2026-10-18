@@ -13,6 +13,7 @@ import {
   deleteAssetsFromDevice,
   checkMediaPermissions,
   requestMediaPermissions,
+  DEFAULT_SYSTEM_ALBUMS,
 } from '@/services/local-media';
 import {
   loadFavoriteIds,
@@ -96,7 +97,7 @@ function enrichItems(
 
 export function GalleryProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<MediaItem[]>([]);
-  const [albumsState, setAlbumsState] = useState<Album[]>([]);
+  const [albumsState, setAlbumsState] = useState<Album[]>(DEFAULT_SYSTEM_ALBUMS);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [isLoadingMedia, setIsLoadingMedia] = useState<boolean>(true);
 
@@ -128,7 +129,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
 
     if (!isGranted) {
       setItems([]);
-      setAlbumsState([]);
+      setAlbumsState(DEFAULT_SYSTEM_ALBUMS);
       setIsLoadingMedia(false);
       return;
     }
@@ -182,7 +183,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
 
       if (!isGranted) {
         setItems([]);
-        setAlbumsState([]);
+        setAlbumsState(DEFAULT_SYSTEM_ALBUMS);
         setIsLoadingMedia(false);
         return;
       }
@@ -316,9 +317,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       triggerHaptic();
       setSelectedIds((prev) => {
         if (prev.includes(id)) {
-          const next = prev.filter((item) => item !== id);
-          if (next.length === 0) setIsSelectionMode(false);
-          return next;
+          return prev.filter((item) => item !== id);
         } else {
           return [...prev, id];
         }

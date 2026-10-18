@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   ActivityIndicator,
+  BackHandler,
   Dimensions,
   Platform,
   Pressable,
@@ -34,6 +35,7 @@ export default function PhotosScreen() {
     toggleSelect,
     selectAll,
     setIsSelectionMode,
+    clearSelection,
     searchQuery,
     hasPermission,
     isLoadingMedia,
@@ -43,6 +45,16 @@ export default function PhotosScreen() {
 
   const [showAddToAlbumModal, setShowAddToAlbumModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  useEffect(() => {
+    if (!isSelectionMode) return;
+    const backAction = () => {
+      clearSelection();
+      return true;
+    };
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
+    return () => backHandler.remove();
+  }, [isSelectionMode, clearSelection]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);
@@ -78,8 +90,8 @@ export default function PhotosScreen() {
   const handleItemLongPress = (item: MediaItem) => {
     if (!isSelectionMode) {
       setIsSelectionMode(true);
-      toggleSelect(item.id);
     }
+    toggleSelect(item.id);
   };
 
   const handleSelectDateGroup = (group: DateGroup) => {
@@ -94,7 +106,6 @@ export default function PhotosScreen() {
     if (allSelected) {
       // Unselect this group's items
       const next = selectedIds.filter((id) => !groupItemIds.includes(id));
-      if (next.length === 0) setIsSelectionMode(false);
       selectAll(next);
     } else {
       // Add all items in this group

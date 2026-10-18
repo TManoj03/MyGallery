@@ -16,7 +16,7 @@ interface PhotoGridItemProps {
   onLongPress: () => void;
 }
 
-export function PhotoGridItem({
+function PhotoGridItemComponent({
   item,
   density,
   isSelected,
@@ -60,7 +60,6 @@ export function PhotoGridItem({
       style={({ pressed }) => [
         styles.container,
         { aspectRatio: getAspectRatio() },
-        isSelected && styles.selectedBorder,
         pressed && styles.pressed,
       ]}
     >
@@ -68,16 +67,15 @@ export function PhotoGridItem({
         source={{ uri: item.uri }}
         style={styles.image}
         contentFit="cover"
-        transition={200}
         cachePolicy="memory-disk"
       />
 
-      {/* Dim overlay when selected */}
-      {isSelected && <View style={styles.selectedOverlay} />}
+      {/* Dim overlay and border when selected */}
+      {isSelected && <View style={styles.selectedOverlay} pointerEvents="none" />}
 
       {/* Selection checkbox badge */}
       {isSelectionMode && (
-        <View style={styles.checkboxContainer}>
+        <View style={styles.checkboxContainer} pointerEvents="none">
           <View
             style={[
               styles.checkboxCircle,
@@ -117,6 +115,20 @@ export function PhotoGridItem({
   );
 }
 
+function arePropsEqual(prev: PhotoGridItemProps, next: PhotoGridItemProps) {
+  return (
+    prev.item.id === next.item.id &&
+    prev.item.uri === next.item.uri &&
+    prev.item.isFavorite === next.item.isFavorite &&
+    prev.item.mediaType === next.item.mediaType &&
+    prev.density === next.density &&
+    prev.isSelected === next.isSelected &&
+    prev.isSelectionMode === next.isSelectionMode
+  );
+}
+
+export const PhotoGridItem = React.memo(PhotoGridItemComponent, arePropsEqual);
+
 const styles = StyleSheet.create({
   container: {
     width: '100%',
@@ -132,13 +144,13 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.88,
   },
-  selectedBorder: {
-    borderWidth: 2,
-    borderColor: '#EB0029',
-  },
   selectedOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(235, 0, 41, 0.22)',
+    borderWidth: 2.5,
+    borderColor: '#EB0029',
+    borderRadius: 4,
+    zIndex: 1,
   },
   checkboxContainer: {
     position: 'absolute',

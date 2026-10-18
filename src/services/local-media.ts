@@ -8,6 +8,63 @@ export interface LocalMediaResult {
   permissionGranted: boolean;
 }
 
+export const DEFAULT_SYSTEM_ALBUMS: Album[] = [
+  {
+    id: 'camera',
+    title: 'Camera',
+    coverUri: undefined,
+    itemCount: 0,
+    isSystem: true,
+    systemType: 'camera',
+    createdAt: Date.now(),
+  },
+  {
+    id: 'favorites',
+    title: 'Favorites',
+    coverUri: undefined,
+    itemCount: 0,
+    isSystem: true,
+    systemType: 'favorites',
+    createdAt: Date.now(),
+  },
+  {
+    id: 'screenshots',
+    title: 'Screenshots',
+    coverUri: undefined,
+    itemCount: 0,
+    isSystem: true,
+    systemType: 'screenshots',
+    createdAt: Date.now(),
+  },
+  {
+    id: 'videos',
+    title: 'Videos',
+    coverUri: undefined,
+    itemCount: 0,
+    isSystem: true,
+    systemType: 'videos',
+    createdAt: Date.now(),
+  },
+  {
+    id: 'burst',
+    title: 'Burst Shots',
+    coverUri: undefined,
+    itemCount: 0,
+    isSystem: true,
+    systemType: 'burst',
+    createdAt: Date.now(),
+  },
+  {
+    id: 'trash',
+    title: 'Recycle Bin',
+    coverUri: undefined,
+    itemCount: 0,
+    isSystem: true,
+    systemType: 'trash',
+    createdAt: Date.now(),
+  },
+];
+
 export async function checkMediaPermissions(): Promise<boolean> {
   if (Platform.OS === 'web') {
     return true;
@@ -37,7 +94,7 @@ export async function fetchLocalDeviceMedia(): Promise<LocalMediaResult> {
   if (!isGranted) {
     return {
       items: [],
-      albums: [],
+      albums: DEFAULT_SYSTEM_ALBUMS,
       permissionGranted: false,
     };
   }
@@ -185,7 +242,7 @@ export async function fetchLocalDeviceMedia(): Promise<LocalMediaResult> {
     console.warn('Error fetching local device media:', error);
     return {
       items: [],
-      albums: [],
+      albums: DEFAULT_SYSTEM_ALBUMS,
       permissionGranted: false,
     };
   }

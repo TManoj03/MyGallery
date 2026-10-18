@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   ScrollView,
   Pressable,
   Dimensions,
+  BackHandler,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, router } from 'expo-router';
@@ -15,6 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useGallery } from '@/context/gallery-context';
 import { useTheme } from '@/hooks/use-theme';
 import { PhotoGridItem } from '@/components/photo-grid-item';
+import { SelectionBottomBar } from '@/components/selection-bottom-bar';
+import { AddToAlbumModal } from '@/components/add-to-album-modal';
 import { MediaItem } from '@/types/gallery';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -25,12 +28,49 @@ const ITEM_WIDTH = (SCREEN_WIDTH - (NUM_COLUMNS - 1) * GAP) / NUM_COLUMNS;
 export default function AlbumDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const theme = useTheme();
-  const { albums, media, favorites, isSelectionMode, selectedIds, toggleSelect, setIsSelectionMode } =
-    useGallery();
+  const {
+    albums,
+    media,
+    favorites,
+    isSelectionMode,
+    selectedIds,
+    toggleSelect,
+    setIsSelectionMode,
+    clearSelection,
+  } = useGallery();
+
+  const [showAddToAlbumModal, setShowAddToAlbumModal] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      clearSelection();
+    };
+  }, [clearSelection]);
+
+  useEffect(() => {
+    if (!isSelectionMode) return;
+    const backAction = () => {
+      clearSelection();
+      return true;
+    };
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+    return () => backHandler.remove();
+  }, [isSelectionMode, clearSelection]);
 
   const album = useMemo(() => {
     const found = albums.find((a) => a.id === id);
     if (found) return found;
+
+    if (id === 'videos') {
+      return {
+        id: 'videos',
+        title: 'Videos',
+        itemCount: media.filter((m) => m.mediaType === 'video').length,
+        isSystem: true,
+        systemType: 'videos' as const,
+        createdAt: 0,
+      };
+    }
     if (id === 'burst') {
       return {
         id: 'burst',
@@ -41,8 +81,38 @@ export default function AlbumDetailScreen() {
         createdAt: 0,
       };
     }
+    if (id === 'camera') {
+      return {
+        id: 'camera',
+        title: 'Camera',
+        itemCount: media.filter((m) => m.albumIds.includes('camera')).length,
+        isSystem: true,
+        systemType: 'camera' as const,
+        createdAt: 0,
+      };
+    }
+    if (id === 'favorites') {
+      return {
+        id: 'favorites',
+        title: 'Favorites',
+        itemCount: favorites.length,
+        isSystem: true,
+        systemType: 'favorites' as const,
+        createdAt: 0,
+      };
+    }
+    if (id === 'screenshots') {
+      return {
+        id: 'screenshots',
+        title: 'Screenshots',
+        itemCount: media.filter((m) => m.albumIds.includes('screenshots')).length,
+        isSystem: true,
+        systemType: 'screenshots' as const,
+        createdAt: 0,
+      };
+    }
     return undefined;
-  }, [albums, id, media]);
+  }, [albums, id, media, favorites]);
 
   // Filter items in this album
   const albumMedia = useMemo(() => {
@@ -102,18 +172,37 @@ export default function AlbumDetailScreen() {
         </View>
 
         <Pressable
-          onPress={() => setIsSelectionMode(!isSelectionMode)}
-          style={[styles.selectPill, { backgroundColor: theme.backgroundElement }]}
+          onPress={() => {
+            if (isSelectionMode) {
+              clearSelection();
+            } else {
+              setIsSelectionMode(true);
+            }
+          }}
+          style={[
+            styles.selectPill,
+            {
+              backgroundColor: isSelectionMode ? theme.primary : theme.backgroundElement,
+            },
+          ]}
         >
-          <Text style={[styles.selectPillText, { color: theme.text }]}>
-            {isSelectionMode ? 'Done' : 'Select'}
+          <Text
+            style={[
+              styles.selectPillText,
+              { color: isSelectionMode ? '#FFFFFF' : theme.text },
+            ]}
+          >
+            {isSelectionMode ? 'Cancel' : 'Select'}
           </Text>
         </Pressable>
       </View>
 
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          isSelectionMode && { paddingBottom: 110 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Cover Hero Banner */}
@@ -133,9 +222,42 @@ export default function AlbumDetailScreen() {
         {/* Media Grid */}
         {albumMedia.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Ionicons name="images-outline" size={48} color={theme.textMuted} />
+            <Ionicons
+              name={
+                album.id === 'videos'
+                  ? 'videocam-outline'
+                  : album.id === 'burst'
+                  ? 'copy-outline'
+                  : album.id === 'favorites'
+                  ? 'heart-outline'
+                  : album.id === 'screenshots'
+                  ? 'phone-portrait-outline'
+                  : 'images-outline'
+              }
+              size={56}
+              color={theme.textMuted}
+            />
+            <Text style={[styles.emptyTitle, { color: theme.text }]}>
+              {album.id === 'videos'
+                ? 'No Videos'
+                : album.id === 'burst'
+                ? 'No Burst Shots'
+                : album.id === 'favorites'
+                ? 'No Favorites'
+                : album.id === 'screenshots'
+                ? 'No Screenshots'
+                : 'No Photos'}
+            </Text>
             <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-              No photos in this album yet
+              {album.id === 'videos'
+                ? 'Videos recorded or saved on this device will appear here'
+                : album.id === 'burst'
+                ? 'Burst shot sequences will appear here'
+                : album.id === 'favorites'
+                ? 'Photos and videos you mark as favorite will appear here'
+                : album.id === 'screenshots'
+                ? 'Screenshots captured on this device will appear here'
+                : 'No photos in this album yet'}
             </Text>
           </View>
         ) : (
@@ -151,8 +273,8 @@ export default function AlbumDetailScreen() {
                   onLongPress={() => {
                     if (!isSelectionMode) {
                       setIsSelectionMode(true);
-                      toggleSelect(item.id);
                     }
+                    toggleSelect(item.id);
                   }}
                 />
               </View>
@@ -160,6 +282,17 @@ export default function AlbumDetailScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Multi-Select Floating Action Bar */}
+      <SelectionBottomBar
+        onAddToAlbumPress={() => setShowAddToAlbumModal(true)}
+      />
+
+      {/* Add To Album Modal */}
+      <AddToAlbumModal
+        visible={showAddToAlbumModal}
+        onClose={() => setShowAddToAlbumModal(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -243,11 +376,19 @@ const styles = StyleSheet.create({
   emptyBox: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 60,
-    gap: 12,
+    paddingVertical: 80,
+    gap: 8,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 4,
   },
   emptyText: {
-    fontSize: 14,
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+    lineHeight: 18,
   },
   backButton: {
     backgroundColor: '#EB0029',
