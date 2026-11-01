@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,8 +15,6 @@ import { useTheme } from '@/hooks/use-theme';
 import { useGallery } from '@/context/gallery-context';
 import { DensitySwitcher } from './density-switcher';
 
-const CATEGORIES = ['All', 'Camera', 'Screenshots', 'Videos', 'Downloads', 'WhatsApp'];
-
 interface GalleryHeaderProps {
   photoCount: number;
   onCameraPress?: () => void;
@@ -25,8 +23,11 @@ interface GalleryHeaderProps {
 export function GalleryHeader({ photoCount, onCameraPress }: GalleryHeaderProps) {
   const theme = useTheme();
   const {
+    allMedia,
     viewDensity,
     setViewDensity,
+    sortOrder,
+    toggleSortOrder,
     isSelectionMode,
     setIsSelectionMode,
     clearSelection,
@@ -36,6 +37,48 @@ export function GalleryHeader({ photoCount, onCameraPress }: GalleryHeaderProps)
     activeCategoryFilter,
     setActiveCategoryFilter,
   } = useGallery();
+
+  // Dynamically calculate available categories that actually have photos or videos
+  const availableCategories = useMemo(() => {
+    const nonDeleted = allMedia.filter((m) => !m.isDeleted);
+    const result: string[] = ['All'];
+    const candidates = ['Camera', 'Screenshots', 'Videos', 'WhatsApp', 'Twitter', 'Downloads'];
+
+    for (const cat of candidates) {
+      const hasItems = nonDeleted.some((m) => {
+        if (cat === 'Videos') {
+          return m.mediaType === 'video' || m.category.toLowerCase() === 'videos';
+        }
+        return m.category.toLowerCase() === cat.toLowerCase();
+      });
+      if (hasItems) {
+        result.push(cat);
+      }
+    }
+
+    // Check if any other category exists in the library with items > 0
+    const knownLower = new Set([...candidates.map((c) => c.toLowerCase()), 'all']);
+    for (const item of nonDeleted) {
+      if (item.category && !knownLower.has(item.category.toLowerCase())) {
+        const catName = item.category.charAt(0).toUpperCase() + item.category.slice(1);
+        if (!result.includes(catName)) {
+          result.push(catName);
+        }
+      }
+    }
+
+    return result;
+  }, [allMedia]);
+
+  // If the currently active filter has 0 photos or is no longer present, reset to All
+  useEffect(() => {
+    if (
+      activeCategoryFilter &&
+      !availableCategories.some((c) => c.toLowerCase() === activeCategoryFilter.toLowerCase())
+    ) {
+      setActiveCategoryFilter(null);
+    }
+  }, [activeCategoryFilter, availableCategories, setActiveCategoryFilter]);
 
   const [showSearch, setShowSearch] = useState(false);
 
@@ -158,54 +201,78 @@ export function GalleryHeader({ photoCount, onCameraPress }: GalleryHeaderProps)
         </View>
       )}
 
-      {/* Controls row: Density Switcher & Category chips */}
+      {/* Controls row: Density Switcher, Sort Order & Category chips */}
       {!isSelectionMode && (
         <View style={styles.secondaryControls}>
-          <DensitySwitcher density={viewDensity} onChange={setViewDensity} />
+          <View style={styles.controlsTopRow}>
+            <DensitySwitcher density={viewDensity} onChange={setViewDensity} />
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.categoryScroll}
-          >
-            {CATEGORIES.map((cat) => {
-              const isCatActive =
-                cat === 'All'
-                  ? activeCategoryFilter === null
-                  : activeCategoryFilter?.toLowerCase() === cat.toLowerCase();
+            <Pressable
+              onPress={toggleSortOrder}
+              style={({ pressed }) => [
+                styles.sortTogglePill,
+                { backgroundColor: theme.backgroundElement },
+                pressed && styles.pressed,
+              ]}
+              accessibilityLabel={`Sort order: ${sortOrder === 'desc' ? 'Newest on top' : 'Oldest on top'}`}
+            >
+              <Ionicons
+                name={sortOrder === 'desc' ? 'arrow-down-outline' : 'arrow-up-outline'}
+                size={14}
+                color={theme.primary}
+                style={{ marginRight: 5 }}
+              />
+              <Text style={[styles.sortToggleText, { color: theme.text }]}>
+                {sortOrder === 'desc' ? 'Newest on top' : 'Oldest on top'}
+              </Text>
+            </Pressable>
+          </View>
 
-              return (
-                <Pressable
-                  key={cat}
-                  onPress={() => {
-                    if (Platform.OS !== 'web') {
-                      try {
-                        Haptics.selectionAsync();
-                      } catch {}
-                    }
-                    setActiveCategoryFilter(cat === 'All' ? null : cat);
-                  }}
-                  style={[
-                    styles.categoryChip,
-                    {
-                      backgroundColor: isCatActive
-                        ? theme.text
-                        : theme.backgroundElement,
-                    },
-                  ]}
-                >
-                  <Text
+          {availableCategories.length > 1 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.categoryScroll}
+            >
+              {availableCategories.map((cat) => {
+                const isCatActive =
+                  cat === 'All'
+                    ? activeCategoryFilter === null
+                    : activeCategoryFilter?.toLowerCase() === cat.toLowerCase();
+
+                return (
+                  <Pressable
+                    key={cat}
+                    onPress={() => {
+                      if (Platform.OS !== 'web') {
+                        try {
+                          Haptics.selectionAsync();
+                        } catch {}
+                      }
+                      setActiveCategoryFilter(cat === 'All' ? null : cat);
+                    }}
                     style={[
-                      styles.categoryChipText,
-                      { color: isCatActive ? theme.background : theme.textSecondary },
+                      styles.categoryChip,
+                      {
+                        backgroundColor: isCatActive
+                          ? theme.text
+                          : theme.backgroundElement,
+                      },
                     ]}
                   >
-                    {cat}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+                    <Text
+                      style={[
+                        styles.categoryChipText,
+                        { color: isCatActive ? theme.background : theme.textSecondary },
+                      ]}
+                    >
+                      {cat}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
         </View>
       )}
     </View>
@@ -277,6 +344,22 @@ const styles = StyleSheet.create({
   },
   secondaryControls: {
     gap: 10,
+  },
+  controlsTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  sortTogglePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  sortToggleText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   categoryScroll: {
     flexDirection: 'row',

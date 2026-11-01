@@ -19,6 +19,7 @@ import { PhotoGridItem } from '@/components/photo-grid-item';
 import { SelectionBottomBar } from '@/components/selection-bottom-bar';
 import { AddToAlbumModal } from '@/components/add-to-album-modal';
 import { MediaItem } from '@/types/gallery';
+import { getAlbumMedia } from '@/services/local-media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const NUM_COLUMNS = 3;
@@ -30,7 +31,7 @@ export default function AlbumDetailScreen() {
   const theme = useTheme();
   const {
     albums,
-    media,
+    allMedia,
     favorites,
     isSelectionMode,
     selectedIds,
@@ -58,14 +59,23 @@ export default function AlbumDetailScreen() {
   }, [isSelectionMode, clearSelection]);
 
   const album = useMemo(() => {
-    const found = albums.find((a) => a.id === id);
+    const decodedId = id ? decodeURIComponent(id) : '';
+    const found = albums.find(
+      (a) =>
+        a.id === id ||
+        a.id === decodedId ||
+        a.title.toLowerCase() === id?.toLowerCase() ||
+        a.title.toLowerCase() === decodedId.toLowerCase()
+    );
     if (found) return found;
+
+    const source = allMedia.filter((m) => !m.isDeleted);
 
     if (id === 'videos') {
       return {
         id: 'videos',
         title: 'Videos',
-        itemCount: media.filter((m) => m.mediaType === 'video').length,
+        itemCount: source.filter((m) => m.mediaType === 'video').length,
         isSystem: true,
         systemType: 'videos' as const,
         createdAt: 0,
@@ -75,7 +85,7 @@ export default function AlbumDetailScreen() {
       return {
         id: 'burst',
         title: 'Burst Shots',
-        itemCount: media.filter((m) => m.mediaType === 'burst').length,
+        itemCount: source.filter((m) => m.mediaType === 'burst').length,
         isSystem: true,
         systemType: 'burst' as const,
         createdAt: 0,
@@ -85,7 +95,7 @@ export default function AlbumDetailScreen() {
       return {
         id: 'camera',
         title: 'Camera',
-        itemCount: media.filter((m) => m.albumIds.includes('camera')).length,
+        itemCount: source.filter((m) => m.albumIds.includes('camera') || m.category === 'Camera').length,
         isSystem: true,
         systemType: 'camera' as const,
         createdAt: 0,
@@ -105,35 +115,29 @@ export default function AlbumDetailScreen() {
       return {
         id: 'screenshots',
         title: 'Screenshots',
-        itemCount: media.filter((m) => m.albumIds.includes('screenshots')).length,
+        itemCount: source.filter((m) => m.albumIds.includes('screenshots') || m.category === 'Screenshots').length,
         isSystem: true,
         systemType: 'screenshots' as const,
         createdAt: 0,
       };
     }
-    return undefined;
-  }, [albums, id, media, favorites]);
 
-  // Filter items in this album
+    // Match partial title e.g. "whatsapp" matching "WhatsApp Images"
+    const byPartial = albums.find(
+      (a) =>
+        (id && a.title.toLowerCase().includes(id.toLowerCase())) ||
+        (decodedId && a.title.toLowerCase().includes(decodedId.toLowerCase()))
+    );
+    if (byPartial) return byPartial;
+
+    return undefined;
+  }, [albums, id, allMedia, favorites]);
+
+  // Filter items in this album from allMedia so active tab filters don't hide them
   const albumMedia = useMemo(() => {
     if (!album) return [];
-    if (album.id === 'camera') {
-      return media.filter((m) => m.albumIds.includes('camera'));
-    }
-    if (album.id === 'favorites') {
-      return favorites;
-    }
-    if (album.id === 'screenshots') {
-      return media.filter((m) => m.albumIds.includes('screenshots'));
-    }
-    if (album.id === 'videos') {
-      return media.filter((m) => m.mediaType === 'video');
-    }
-    if (album.id === 'burst') {
-      return media.filter((m) => m.mediaType === 'burst');
-    }
-    return media.filter((m) => m.albumIds.includes(album.id));
-  }, [album, media, favorites]);
+    return getAlbumMedia(album, allMedia, favorites);
+  }, [album, allMedia, favorites]);
 
   if (!album) {
     return (

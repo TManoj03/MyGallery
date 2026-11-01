@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Modal,
   Platform,
@@ -21,7 +21,7 @@ import { useTheme } from "@/hooks/use-theme";
 
 export default function AlbumsScreen() {
   const theme = useTheme();
-  const { albums, favorites, trash, media, createAlbum, refreshMedia } =
+  const { albums, favorites, trash, allMedia, createAlbum, refreshMedia } =
     useGallery();
 
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -40,14 +40,108 @@ export default function AlbumsScreen() {
   const screensAlbum = albums.find((a) => a.id === "screenshots");
   const videosAlbum = albums.find((a) => a.id === "videos");
 
-  // Custom user albums
-  const customAlbums = albums.filter(
-    (a) =>
-      a.id !== "camera" &&
-      a.id !== "favorites" &&
-      a.id !== "screenshots" &&
-      a.id !== "videos",
+  // Pinned system albums - only include if they contain photos/videos (count > 0)
+  const pinnedList = useMemo(() => {
+    const list: {
+      id: string;
+      title: string;
+      coverUri?: string;
+      count: number;
+      icon: keyof typeof Ionicons.glyphMap;
+      badgeColor: string;
+      defaultIcon: keyof typeof Ionicons.glyphMap;
+    }[] = [];
+
+    const cameraCount = cameraAlbum?.itemCount ?? 0;
+    if (cameraCount > 0) {
+      list.push({
+        id: "camera",
+        title: "Camera",
+        coverUri: cameraAlbum?.coverUri,
+        count: cameraCount,
+        icon: "camera",
+        badgeColor: "#EB0029",
+        defaultIcon: "camera-outline",
+      });
+    }
+
+    const favCount = favorites.length;
+    if (favCount > 0) {
+      list.push({
+        id: "favorites",
+        title: "Favorites",
+        coverUri: favAlbum?.coverUri,
+        count: favCount,
+        icon: "heart",
+        badgeColor: "#FF2B44",
+        defaultIcon: "heart-outline",
+      });
+    }
+
+    const screensCount = screensAlbum?.itemCount ?? 0;
+    if (screensCount > 0) {
+      list.push({
+        id: "screenshots",
+        title: "Screenshots",
+        coverUri: screensAlbum?.coverUri,
+        count: screensCount,
+        icon: "phone-portrait",
+        badgeColor: theme.accent || "#0084FF",
+        defaultIcon: "phone-portrait-outline",
+      });
+    }
+
+    const videosCount = videosAlbum?.itemCount ?? 0;
+    if (videosCount > 0) {
+      list.push({
+        id: "videos",
+        title: "Videos",
+        coverUri: videosAlbum?.coverUri,
+        count: videosCount,
+        icon: "videocam",
+        badgeColor: "#A855F7",
+        defaultIcon: "videocam-outline",
+      });
+    }
+
+    return list;
+  }, [
+    cameraAlbum?.itemCount,
+    cameraAlbum?.coverUri,
+    favorites.length,
+    favAlbum?.coverUri,
+    screensAlbum?.itemCount,
+    screensAlbum?.coverUri,
+    videosAlbum?.itemCount,
+    videosAlbum?.coverUri,
+    theme.accent,
+  ]);
+
+  // Custom user albums and device folders - only shown if they contain photos or videos
+  const visibleCustomAlbums = useMemo(() => {
+    return albums.filter(
+      (a) =>
+        a.id !== "camera" &&
+        a.id !== "favorites" &&
+        a.id !== "screenshots" &&
+        a.id !== "videos" &&
+        a.id !== "trash" &&
+        a.itemCount > 0,
+    );
+  }, [albums]);
+
+  // Media type counts
+  const videoCount = useMemo(
+    () => allMedia.filter((m) => !m.isDeleted && m.mediaType === "video").length,
+    [allMedia],
   );
+  const burstCount = useMemo(
+    () => allMedia.filter((m) => !m.isDeleted && m.mediaType === "burst").length,
+    [allMedia],
+  );
+  const hasMediaTypes = videoCount > 0 || burstCount > 0;
+
+  const totalVisibleCollections = pinnedList.length + visibleCustomAlbums.length;
 
   const handleCreateAlbum = () => {
     if (!newAlbumTitle.trim()) return;
@@ -68,7 +162,7 @@ export default function AlbumsScreen() {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       } catch {}
     }
-    router.push(`/album/${albumId}` as any);
+    router.push(`/album/${encodeURIComponent(albumId)}` as any);
   };
 
   return (
@@ -83,7 +177,7 @@ export default function AlbumsScreen() {
             Albums
           </Text>
           <Text style={[styles.headerSubtitle, { color: theme.textSecondary }]}>
-            {albums.length} collections
+            {totalVisibleCollections} {totalVisibleCollections === 1 ? "collection" : "collections"}
           </Text>
         </View>
 
@@ -112,334 +206,219 @@ export default function AlbumsScreen() {
           />
         }
       >
-        {/* 2x2 Pinned OnePlus Hero Cards */}
-        <View style={styles.pinnedGrid}>
-          {/* Camera Card */}
-          <Pressable
-            onPress={() => handleOpenAlbum("camera")}
-            style={({ pressed }) => [
-              styles.pinnedCard,
-              { backgroundColor: theme.card, borderColor: theme.border },
-              pressed && styles.pressed,
-            ]}
-          >
-            <View style={styles.pinnedCoverContainer}>
-              {cameraAlbum?.coverUri ? (
-                <Image
-                  source={{ uri: cameraAlbum.coverUri }}
-                  style={styles.pinnedCover}
-                  contentFit="cover"
-                />
-              ) : (
-                <View
-                  style={[
-                    styles.emptyCover,
-                    { backgroundColor: theme.backgroundElement },
-                  ]}
-                >
-                  <Ionicons
-                    name="camera-outline"
-                    size={28}
-                    color={theme.textSecondary}
-                  />
-                </View>
-              )}
-              <View style={styles.pinnedIconBadge}>
-                <Ionicons name="camera" size={12} color="#FFFFFF" />
-              </View>
-            </View>
-            <View style={styles.pinnedDetails}>
-              <Text
-                style={[styles.pinnedTitle, { color: theme.text }]}
-                numberOfLines={1}
-              >
-                Camera
-              </Text>
-              <Text
-                style={[styles.pinnedCount, { color: theme.textSecondary }]}
-              >
-                {cameraAlbum?.itemCount ?? 0}
-              </Text>
-            </View>
-          </Pressable>
-
-          {/* Favorites Card */}
-          <Pressable
-            onPress={() => handleOpenAlbum("favorites")}
-            style={({ pressed }) => [
-              styles.pinnedCard,
-              { backgroundColor: theme.card, borderColor: theme.border },
-              pressed && styles.pressed,
-            ]}
-          >
-            <View style={styles.pinnedCoverContainer}>
-              {favAlbum?.coverUri ? (
-                <Image
-                  source={{ uri: favAlbum.coverUri }}
-                  style={styles.pinnedCover}
-                  contentFit="cover"
-                />
-              ) : (
-                <View
-                  style={[
-                    styles.emptyCover,
-                    { backgroundColor: theme.backgroundElement },
-                  ]}
-                >
-                  <Ionicons name="heart-outline" size={28} color="#FF2B44" />
-                </View>
-              )}
-              <View
-                style={[styles.pinnedIconBadge, { backgroundColor: "#FF2B44" }]}
-              >
-                <Ionicons name="heart" size={12} color="#FFFFFF" />
-              </View>
-            </View>
-            <View style={styles.pinnedDetails}>
-              <Text
-                style={[styles.pinnedTitle, { color: theme.text }]}
-                numberOfLines={1}
-              >
-                Favorites
-              </Text>
-              <Text
-                style={[styles.pinnedCount, { color: theme.textSecondary }]}
-              >
-                {favorites.length}
-              </Text>
-            </View>
-          </Pressable>
-
-          {/* Screenshots Card */}
-          <Pressable
-            onPress={() => handleOpenAlbum("screenshots")}
-            style={({ pressed }) => [
-              styles.pinnedCard,
-              { backgroundColor: theme.card, borderColor: theme.border },
-              pressed && styles.pressed,
-            ]}
-          >
-            <View style={styles.pinnedCoverContainer}>
-              {screensAlbum?.coverUri ? (
-                <Image
-                  source={{ uri: screensAlbum.coverUri }}
-                  style={styles.pinnedCover}
-                  contentFit="cover"
-                />
-              ) : (
-                <View
-                  style={[
-                    styles.emptyCover,
-                    { backgroundColor: theme.backgroundElement },
-                  ]}
-                >
-                  <Ionicons
-                    name="phone-portrait-outline"
-                    size={28}
-                    color={theme.textSecondary}
-                  />
-                </View>
-              )}
-              <View
-                style={[
-                  styles.pinnedIconBadge,
-                  { backgroundColor: theme.accent },
+        {/* Pinned OnePlus Hero Cards - only shown if they contain photos or videos */}
+        {pinnedList.length > 0 && (
+          <View style={styles.pinnedGrid}>
+            {pinnedList.map((item) => (
+              <Pressable
+                key={item.id}
+                onPress={() => handleOpenAlbum(item.id)}
+                style={({ pressed }) => [
+                  styles.pinnedCard,
+                  pinnedList.length === 1 && { width: "100%" },
+                  { backgroundColor: theme.card, borderColor: theme.border },
+                  pressed && styles.pressed,
                 ]}
               >
-                <Ionicons name="phone-portrait" size={12} color="#FFFFFF" />
-              </View>
-            </View>
-            <View style={styles.pinnedDetails}>
-              <Text
-                style={[styles.pinnedTitle, { color: theme.text }]}
-                numberOfLines={1}
-              >
-                Screenshots
-              </Text>
-              <Text
-                style={[styles.pinnedCount, { color: theme.textSecondary }]}
-              >
-                {screensAlbum?.itemCount ?? 0}
-              </Text>
-            </View>
-          </Pressable>
-
-          {/* Videos Card */}
-          <Pressable
-            onPress={() => handleOpenAlbum("videos")}
-            style={({ pressed }) => [
-              styles.pinnedCard,
-              { backgroundColor: theme.card, borderColor: theme.border },
-              pressed && styles.pressed,
-            ]}
-          >
-            <View style={styles.pinnedCoverContainer}>
-              {videosAlbum?.coverUri ? (
-                <Image
-                  source={{ uri: videosAlbum.coverUri }}
-                  style={styles.pinnedCover}
-                  contentFit="cover"
-                />
-              ) : (
-                <View
-                  style={[
-                    styles.emptyCover,
-                    { backgroundColor: theme.backgroundElement },
-                  ]}
-                >
-                  <Ionicons
-                    name="videocam-outline"
-                    size={28}
-                    color={theme.textSecondary}
-                  />
-                </View>
-              )}
-              <View
-                style={[styles.pinnedIconBadge, { backgroundColor: "#A855F7" }]}
-              >
-                <Ionicons name="videocam" size={12} color="#FFFFFF" />
-              </View>
-            </View>
-            <View style={styles.pinnedDetails}>
-              <Text
-                style={[styles.pinnedTitle, { color: theme.text }]}
-                numberOfLines={1}
-              >
-                Videos
-              </Text>
-              <Text
-                style={[styles.pinnedCount, { color: theme.textSecondary }]}
-              >
-                {videosAlbum?.itemCount ?? 0}
-              </Text>
-            </View>
-          </Pressable>
-        </View>
-
-        {/* Custom Albums Section */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>
-            My Albums
-          </Text>
-          <Text style={[styles.sectionCount, { color: theme.textSecondary }]}>
-            {customAlbums.length}
-          </Text>
-        </View>
-
-        <View style={styles.customAlbumsGrid}>
-          {customAlbums.map((album) => (
-            <Pressable
-              key={album.id}
-              onPress={() => handleOpenAlbum(album.id)}
-              style={({ pressed }) => [
-                styles.customAlbumCard,
-                { backgroundColor: theme.card, borderColor: theme.border },
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.customAlbumCoverWrapper}>
-                {album.coverUri ? (
-                  <Image
-                    source={{ uri: album.coverUri }}
-                    style={styles.customAlbumCover}
-                    contentFit="cover"
-                  />
-                ) : (
+                <View style={styles.pinnedCoverContainer}>
+                  {item.coverUri ? (
+                    <Image
+                      source={{ uri: item.coverUri }}
+                      style={styles.pinnedCover}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <View
+                      style={[
+                        styles.emptyCover,
+                        { backgroundColor: theme.backgroundElement },
+                      ]}
+                    >
+                      <Ionicons
+                        name={item.defaultIcon}
+                        size={28}
+                        color={theme.textSecondary}
+                      />
+                    </View>
+                  )}
                   <View
                     style={[
-                      styles.emptyCover,
-                      { backgroundColor: theme.backgroundElement },
+                      styles.pinnedIconBadge,
+                      { backgroundColor: item.badgeColor },
                     ]}
                   >
-                    <Ionicons
-                      name="images-outline"
-                      size={32}
-                      color={theme.textSecondary}
-                    />
+                    <Ionicons name={item.icon} size={12} color="#FFFFFF" />
                   </View>
-                )}
-              </View>
-              <View style={styles.customAlbumInfo}>
-                <Text
-                  style={[styles.customAlbumTitle, { color: theme.text }]}
-                  numberOfLines={1}
-                >
-                  {album.title}
-                </Text>
-                <Text
-                  style={[
-                    styles.customAlbumCount,
-                    { color: theme.textSecondary },
+                </View>
+                <View style={styles.pinnedDetails}>
+                  <Text
+                    style={[styles.pinnedTitle, { color: theme.text }]}
+                    numberOfLines={1}
+                  >
+                    {item.title}
+                  </Text>
+                  <Text
+                    style={[styles.pinnedCount, { color: theme.textSecondary }]}
+                  >
+                    {item.count}
+                  </Text>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {/* Custom Albums Section - only shown if they contain photos or videos */}
+        {visibleCustomAlbums.length > 0 && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                My Albums
+              </Text>
+              <Text style={[styles.sectionCount, { color: theme.textSecondary }]}>
+                {visibleCustomAlbums.length}
+              </Text>
+            </View>
+
+            <View style={styles.customAlbumsGrid}>
+              {visibleCustomAlbums.map((album) => (
+                <Pressable
+                  key={album.id}
+                  onPress={() => handleOpenAlbum(album.id)}
+                  style={({ pressed }) => [
+                    styles.customAlbumCard,
+                    { backgroundColor: theme.card, borderColor: theme.border },
+                    pressed && styles.pressed,
                   ]}
                 >
-                  {album.itemCount} {album.itemCount === 1 ? "photo" : "photos"}
-                </Text>
-              </View>
-            </Pressable>
-          ))}
-        </View>
-
-        {/* Media Types Row */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>
-            Media Types
-          </Text>
-        </View>
-
-        <View
-          style={[
-            styles.utilitiesCard,
-            { backgroundColor: theme.card, borderColor: theme.border },
-          ]}
-        >
-          <Pressable
-            onPress={() => handleOpenAlbum("videos")}
-            style={({ pressed }) => [
-              styles.utilityRow,
-              pressed && { backgroundColor: theme.backgroundElement },
-            ]}
-          >
-            <View style={[styles.utilityIcon, { backgroundColor: "#380B12" }]}>
-              <Ionicons name="videocam" size={18} color="#EB0029" />
+                  <View style={styles.customAlbumCoverWrapper}>
+                    {album.coverUri ? (
+                      <Image
+                        source={{ uri: album.coverUri }}
+                        style={styles.customAlbumCover}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <View
+                        style={[
+                          styles.emptyCover,
+                          { backgroundColor: theme.backgroundElement },
+                        ]}
+                      >
+                        <Ionicons
+                          name="images-outline"
+                          size={32}
+                          color={theme.textSecondary}
+                        />
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.customAlbumInfo}>
+                    <Text
+                      style={[styles.customAlbumTitle, { color: theme.text }]}
+                      numberOfLines={1}
+                    >
+                      {album.title}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.customAlbumCount,
+                        { color: theme.textSecondary },
+                      ]}
+                    >
+                      {album.itemCount} {album.itemCount === 1 ? "photo" : "photos"}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
             </View>
-            <Text style={[styles.utilityLabel, { color: theme.text }]}>
-              Videos
-            </Text>
-            <Text style={[styles.utilityBadge, { color: theme.textSecondary }]}>
-              {media.filter((m) => m.mediaType === "video").length}
-            </Text>
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={theme.textMuted}
-            />
-          </Pressable>
+          </>
+        )}
 
-          <View style={[styles.divider, { backgroundColor: theme.border }]} />
-
-          <Pressable
-            onPress={() => handleOpenAlbum("burst")}
-            style={({ pressed }) => [
-              styles.utilityRow,
-              pressed && { backgroundColor: theme.backgroundElement },
-            ]}
-          >
-            <View style={[styles.utilityIcon, { backgroundColor: "#0B2338" }]}>
-              <Ionicons name="copy" size={18} color="#0084FF" />
+        {/* Media Types Row - only shown if videos or burst shots exist */}
+        {hasMediaTypes && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                Media Types
+              </Text>
             </View>
-            <Text style={[styles.utilityLabel, { color: theme.text }]}>
-              Burst Shots
+
+            <View
+              style={[
+                styles.utilitiesCard,
+                { backgroundColor: theme.card, borderColor: theme.border },
+              ]}
+            >
+              {videoCount > 0 && (
+                <Pressable
+                  onPress={() => handleOpenAlbum("videos")}
+                  style={({ pressed }) => [
+                    styles.utilityRow,
+                    pressed && { backgroundColor: theme.backgroundElement },
+                  ]}
+                >
+                  <View style={[styles.utilityIcon, { backgroundColor: "#380B12" }]}>
+                    <Ionicons name="videocam" size={18} color="#EB0029" />
+                  </View>
+                  <Text style={[styles.utilityLabel, { color: theme.text }]}>
+                    Videos
+                  </Text>
+                  <Text style={[styles.utilityBadge, { color: theme.textSecondary }]}>
+                    {videoCount}
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={theme.textMuted}
+                  />
+                </Pressable>
+              )}
+
+              {videoCount > 0 && burstCount > 0 && (
+                <View style={[styles.divider, { backgroundColor: theme.border }]} />
+              )}
+
+              {burstCount > 0 && (
+                <Pressable
+                  onPress={() => handleOpenAlbum("burst")}
+                  style={({ pressed }) => [
+                    styles.utilityRow,
+                    pressed && { backgroundColor: theme.backgroundElement },
+                  ]}
+                >
+                  <View style={[styles.utilityIcon, { backgroundColor: "#0B2338" }]}>
+                    <Ionicons name="copy" size={18} color="#0084FF" />
+                  </View>
+                  <Text style={[styles.utilityLabel, { color: theme.text }]}>
+                    Burst Shots
+                  </Text>
+                  <Text style={[styles.utilityBadge, { color: theme.textSecondary }]}>
+                    {burstCount}
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={theme.textMuted}
+                  />
+                </Pressable>
+              )}
+            </View>
+          </>
+        )}
+
+        {/* Empty State when no albums have any photos or videos */}
+        {pinnedList.length === 0 && visibleCustomAlbums.length === 0 && !hasMediaTypes && (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="albums-outline" size={56} color={theme.textMuted} />
+            <Text style={[styles.emptyTitle, { color: theme.text }]}>
+              No Albums with Photos
             </Text>
-            <Text style={[styles.utilityBadge, { color: theme.textSecondary }]}>
-              {media.filter((m) => m.mediaType === "burst").length}
+            <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>
+              Albums containing photos or videos will automatically appear here.
             </Text>
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={theme.textMuted}
-            />
-          </Pressable>
-        </View>
+          </View>
+        )}
 
         {/* System Utilities: Recycle Bin & Private Safe */}
         <View style={styles.sectionHeader}>
@@ -783,6 +762,23 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.75,
     transform: [{ scale: 0.98 }],
+  },
+  emptyContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+    gap: 6,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    marginTop: 8,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
   },
   footerContainer: {
     alignItems: "center",

@@ -4,8 +4,10 @@ import { router } from "expo-router";
 import { useMemo, useState, useEffect } from "react";
 import {
   ActivityIndicator,
+  Alert,
   BackHandler,
   Dimensions,
+  Linking,
   Platform,
   Pressable,
   RefreshControl,
@@ -37,10 +39,14 @@ export default function PhotosScreen() {
     setIsSelectionMode,
     clearSelection,
     searchQuery,
+    setSearchQuery,
+    activeCategoryFilter,
+    setActiveCategoryFilter,
     hasPermission,
     isLoadingMedia,
     requestPermission,
     refreshMedia,
+    sortOrder,
   } = useGallery();
 
   const [showAddToAlbumModal, setShowAddToAlbumModal] = useState(false);
@@ -62,10 +68,34 @@ export default function PhotosScreen() {
     setIsRefreshing(false);
   };
 
-  // Group media chronologically
+  const handleCameraPress = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert('Camera', 'Device camera is available on Android and iOS.');
+      return;
+    }
+    try {
+      const cameraUrl = Platform.OS === 'android' ? 'camera:' : 'photos-redirect://';
+      const canOpen = await Linking.canOpenURL(cameraUrl);
+      if (canOpen) {
+        await Linking.openURL(cameraUrl);
+      } else {
+        Alert.alert(
+          'Capture Photos',
+          'Use your device Camera to snap new photos or record videos. When you return to Gallery, new items will automatically appear on the top!'
+        );
+      }
+    } catch {
+      Alert.alert(
+        'Capture Photos',
+        'Use your device Camera to snap new photos or record videos. When you return to Gallery, new items will automatically appear on the top!'
+      );
+    }
+  };
+
+  // Group media chronologically based on active sort order (default newest on top)
   const dateGroups: DateGroup[] = useMemo(() => {
-    return groupMediaByDate(media);
-  }, [media]);
+    return groupMediaByDate(media, sortOrder);
+  }, [media, sortOrder]);
 
   // Determine grid columns based on density
   const numColumns = useMemo(() => {
@@ -120,7 +150,7 @@ export default function PhotosScreen() {
       edges={["top"]}
     >
       {/* Header */}
-      <GalleryHeader photoCount={media.length} />
+      <GalleryHeader photoCount={media.length} onCameraPress={handleCameraPress} />
 
       {/* Main Content */}
       {hasPermission === false ? (
@@ -169,6 +199,8 @@ export default function PhotosScreen() {
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.emptyContainer}
+          showsVerticalScrollIndicator={false}
+          bounces={true}
           refreshControl={
             <RefreshControl
               refreshing={isRefreshing}
@@ -177,16 +209,88 @@ export default function PhotosScreen() {
             />
           }
         >
-          <Ionicons name="images-outline" size={64} color={theme.textMuted} />
+          <View
+            style={[
+              styles.emptyIconCircle,
+              { backgroundColor: theme.backgroundElement },
+            ]}
+          >
+            <Ionicons
+              name={
+                activeCategoryFilter?.toLowerCase() === "videos"
+                  ? "videocam-outline"
+                  : activeCategoryFilter?.toLowerCase() === "screenshots"
+                  ? "phone-portrait-outline"
+                  : activeCategoryFilter?.toLowerCase() === "downloads"
+                  ? "download-outline"
+                  : activeCategoryFilter?.toLowerCase() === "whatsapp"
+                  ? "logo-whatsapp"
+                  : searchQuery
+                  ? "search-outline"
+                  : "images-outline"
+              }
+              size={44}
+              color={theme.textMuted}
+            />
+          </View>
           <Text style={[styles.emptyTitle, { color: theme.text }]}>
-            No Local Photos Found
+            {searchQuery
+              ? "No Results Found"
+              : activeCategoryFilter
+              ? `No ${activeCategoryFilter} Photos`
+              : "No Local Photos Found"}
           </Text>
           <Text style={[styles.emptySubtitle, { color: theme.textSecondary }]}>
             {searchQuery
-              ? `No results matching "${searchQuery}"`
+              ? `No images match "${searchQuery}".`
+              : activeCategoryFilter
+              ? `No items found in ${activeCategoryFilter}.`
               : "Pull down to refresh or capture new photos with your camera."}
           </Text>
-          <View style={styles.footerContainer}>
+
+          {activeCategoryFilter ? (
+            <Pressable
+              onPress={() => setActiveCategoryFilter(null)}
+              style={({ pressed }) => [
+                styles.actionPill,
+                { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons
+                name="apps-outline"
+                size={14}
+                color={theme.text}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.actionPillText, { color: theme.text }]}>
+                Show All Photos
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {searchQuery ? (
+            <Pressable
+              onPress={() => setSearchQuery("")}
+              style={({ pressed }) => [
+                styles.actionPill,
+                { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons
+                name="close-circle-outline"
+                size={14}
+                color={theme.text}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.actionPillText, { color: theme.text }]}>
+                Clear Search
+              </Text>
+            </Pressable>
+          ) : null}
+
+          <View style={styles.emptyFooter}>
             <Text style={[styles.footerText, { color: theme.textMuted }]}>
               Developed by Manoj⚡
             </Text>
@@ -366,20 +470,48 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   emptyContainer: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 32,
-    gap: 12,
+    paddingBottom: 90,
+    gap: 10,
+  },
+  emptyIconCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 4,
   },
   emptyTitle: {
     fontSize: 20,
     fontWeight: "700",
+    textAlign: "center",
   },
   emptySubtitle: {
     fontSize: 14,
     textAlign: "center",
     lineHeight: 20,
+    maxWidth: 280,
+  },
+  actionPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginTop: 8,
+  },
+  actionPillText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  emptyFooter: {
+    marginTop: 16,
+    alignItems: "center",
   },
   pressed: {
     opacity: 0.75,

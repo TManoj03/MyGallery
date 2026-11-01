@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import * as Haptics from 'expo-haptics';
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
+import * as MediaLibrary from 'expo-media-library/legacy';
 
 import {
   Album,
   EditAdjustments,
   MediaItem,
   ViewDensity,
+  SortOrder,
 } from '@/types/gallery';
 import {
   fetchLocalDeviceMedia,
@@ -14,6 +16,7 @@ import {
   checkMediaPermissions,
   requestMediaPermissions,
   DEFAULT_SYSTEM_ALBUMS,
+  deduplicateAlbums,
 } from '@/services/local-media';
 import {
   loadFavoriteIds,
@@ -26,6 +29,8 @@ import {
   saveAlbumMediaMap,
   loadEditsMap,
   saveEditsMap,
+  loadPermanentlyDeletedIds,
+  savePermanentlyDeletedIds,
 } from '@/services/gallery-storage';
 
 interface GalleryContextValue {
@@ -45,6 +50,11 @@ interface GalleryContextValue {
   // View state
   viewDensity: ViewDensity;
   setViewDensity: (density: ViewDensity) => void;
+
+  // Sort order
+  sortOrder: SortOrder;
+  setSortOrder: (order: SortOrder) => void;
+  toggleSortOrder: () => void;
 
   // Selection state
   isSelectionMode: boolean;
@@ -102,6 +112,7 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
   const [isLoadingMedia, setIsLoadingMedia] = useState<boolean>(true);
 
   const [viewDensity, setViewDensity] = useState<ViewDensity>('day');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [isSelectionMode, setIsSelectionMode] = useState<boolean>(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -110,9 +121,11 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
   // Persistent storage caches
   const favoriteIdsRef = useRef<Set<string>>(new Set());
   const trashMapRef = useRef<Record<string, number>>({});
+  const permanentlyDeletedIdsRef = useRef<Set<string>>(new Set());
   const customAlbumsRef = useRef<Album[]>([]);
   const albumMediaMapRef = useRef<Record<string, string[]>>({});
   const editsMapRef = useRef<Record<string, EditAdjustments>>({});
+  const isRefreshingRef = useRef(false);
 
   const triggerHaptic = useCallback(() => {
     if (Platform.OS !== 'web') {
@@ -122,93 +135,63 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const toggleSortOrder = useCallback(() => {
+    triggerHaptic();
+    setSortOrder((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+  }, [triggerHaptic]);
+
   const loadMedia = useCallback(async () => {
-    setIsLoadingMedia(true);
-    const isGranted = await checkMediaPermissions();
-    setHasPermission(isGranted);
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
 
-    if (!isGranted) {
-      setItems([]);
-      setAlbumsState(DEFAULT_SYSTEM_ALBUMS);
-      setIsLoadingMedia(false);
-      return;
-    }
-
-    // 1. Load persistent user data from AsyncStorage
-    const [storedFavs, storedTrash, storedCustomAlbums, storedAlbumMedia, storedEdits] =
-      await Promise.all([
-        loadFavoriteIds(),
-        loadTrashMap(),
-        loadCustomAlbums(),
-        loadAlbumMediaMap(),
-        loadEditsMap(),
-      ]);
-
-    const favSet = new Set(storedFavs);
-    favoriteIdsRef.current = favSet;
-    trashMapRef.current = storedTrash;
-    customAlbumsRef.current = storedCustomAlbums;
-    albumMediaMapRef.current = storedAlbumMedia;
-    editsMapRef.current = storedEdits;
-
-    // 2. Fetch fresh device assets
-    const result = await fetchLocalDeviceMedia();
-
-    // 3. Merge persistent favorites, trash, edits, and custom album mappings
-    const enriched = enrichItems(
-      result.items,
-      favSet,
-      storedTrash,
-      storedEdits,
-      storedAlbumMedia
-    );
-
-    setItems(enriched);
-
-    // Merge system albums and custom albums
-    const allAlbums = [...result.albums, ...storedCustomAlbums];
-    setAlbumsState(allAlbums);
-    setIsLoadingMedia(false);
-  }, []);
-
-  // Fetch local device media on mount
-  useEffect(() => {
-    let isMounted = true;
-
-    async function initialize() {
-      if (!isMounted) return;
+    try {
+      setIsLoadingMedia(true);
       const isGranted = await checkMediaPermissions();
-      if (!isMounted) return;
       setHasPermission(isGranted);
 
       if (!isGranted) {
         setItems([]);
         setAlbumsState(DEFAULT_SYSTEM_ALBUMS);
-        setIsLoadingMedia(false);
         return;
       }
 
-      const [storedFavs, storedTrash, storedCustomAlbums, storedAlbumMedia, storedEdits] =
-        await Promise.all([
-          loadFavoriteIds(),
-          loadTrashMap(),
-          loadCustomAlbums(),
-          loadAlbumMediaMap(),
-          loadEditsMap(),
-        ]);
+      // 1. Load persistent user data from AsyncStorage
+      const [
+        storedFavs,
+        storedTrash,
+        storedCustomAlbums,
+        storedAlbumMedia,
+        storedEdits,
+        storedPermanentlyDeleted,
+      ] = await Promise.all([
+        loadFavoriteIds(),
+        loadTrashMap(),
+        loadCustomAlbums(),
+        loadAlbumMediaMap(),
+        loadEditsMap(),
+        loadPermanentlyDeletedIds(),
+      ]);
 
-      if (!isMounted) return;
       const favSet = new Set(storedFavs);
+      const permDeletedSet = new Set(storedPermanentlyDeleted);
       favoriteIdsRef.current = favSet;
+      permanentlyDeletedIdsRef.current = permDeletedSet;
       trashMapRef.current = storedTrash;
       customAlbumsRef.current = storedCustomAlbums;
       albumMediaMapRef.current = storedAlbumMedia;
       editsMapRef.current = storedEdits;
 
+      // 2. Fetch fresh device assets
       const result = await fetchLocalDeviceMedia();
-      if (!isMounted) return;
+
+      // Filter out any assets permanently deleted by the user
+      const filteredDeviceItems = result.items.filter(
+        (item) => !permDeletedSet.has(item.id)
+      );
+
+      // 3. Merge persistent favorites, trash, edits, and custom album mappings
       const enriched = enrichItems(
-        result.items,
+        filteredDeviceItems,
         favSet,
         storedTrash,
         storedEdits,
@@ -216,17 +199,47 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       );
 
       setItems(enriched);
+
+      // Merge system albums and custom albums
       const allAlbums = [...result.albums, ...storedCustomAlbums];
       setAlbumsState(allAlbums);
+    } finally {
       setIsLoadingMedia(false);
+      isRefreshingRef.current = false;
     }
-
-    initialize();
-
-    return () => {
-      isMounted = false;
-    };
   }, []);
+
+  // Fetch local device media on mount
+  useEffect(() => {
+    loadMedia();
+  }, [loadMedia]);
+
+  // Automatically refresh when returning to the app from camera or other apps
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active' && hasPermission) {
+        loadMedia();
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [hasPermission, loadMedia]);
+
+  // Automatically refresh when MediaLibrary reports changes on device
+  useEffect(() => {
+    let subscription: any;
+    try {
+      subscription = MediaLibrary.addListener(() => {
+        if (hasPermission) {
+          loadMedia();
+        }
+      });
+    } catch {}
+    return () => {
+      subscription?.remove?.();
+    };
+  }, [hasPermission, loadMedia]);
 
   const requestPermission = useCallback(async (): Promise<boolean> => {
     triggerHaptic();
@@ -245,14 +258,18 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
     await loadMedia();
   }, [loadMedia]);
 
-  // Filtered views
+  // Filtered views with 100% deterministic sorting and tie-breaker
   const media = useMemo(() => {
     let result = items.filter((item) => !item.isDeleted);
 
     if (activeCategoryFilter) {
-      result = result.filter(
-        (item) => item.category.toLowerCase() === activeCategoryFilter.toLowerCase()
-      );
+      const catLower = activeCategoryFilter.toLowerCase();
+      result = result.filter((item) => {
+        if (catLower === 'videos') {
+          return item.mediaType === 'video' || item.category.toLowerCase() === 'videos';
+        }
+        return item.category.toLowerCase() === catLower;
+      });
     }
 
     if (searchQuery.trim()) {
@@ -265,50 +282,61 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
-    return result.sort((a, b) => b.creationTime - a.creationTime);
-  }, [items, searchQuery, activeCategoryFilter]);
+    return result.sort((a, b) => {
+      if (sortOrder === 'desc') {
+        // Newest on top: highest timestamp first
+        if (b.creationTime !== a.creationTime) {
+          return b.creationTime - a.creationTime;
+        }
+        if (b.modificationTime !== a.modificationTime) {
+          return b.modificationTime - a.modificationTime;
+        }
+        return b.id.localeCompare(a.id);
+      } else {
+        // Oldest on top: lowest timestamp first
+        if (a.creationTime !== b.creationTime) {
+          return a.creationTime - b.creationTime;
+        }
+        if (a.modificationTime !== b.modificationTime) {
+          return a.modificationTime - b.modificationTime;
+        }
+        return a.id.localeCompare(b.id);
+      }
+    });
+  }, [items, searchQuery, activeCategoryFilter, sortOrder]);
 
   const favorites = useMemo(
-    () => items.filter((item) => item.isFavorite && !item.isDeleted),
+    () =>
+      items
+        .filter((item) => item.isFavorite && !item.isDeleted)
+        .sort((a, b) => {
+          if (b.creationTime !== a.creationTime) {
+            return b.creationTime - a.creationTime;
+          }
+          if (b.modificationTime !== a.modificationTime) {
+            return b.modificationTime - a.modificationTime;
+          }
+          return b.id.localeCompare(a.id);
+        }),
     [items]
   );
 
   const trash = useMemo(
-    () => items.filter((item) => item.isDeleted),
+    () =>
+      items
+        .filter((item) => item.isDeleted)
+        .sort((a, b) => {
+          const bDel = b.deletedAt || b.creationTime;
+          const aDel = a.deletedAt || a.creationTime;
+          if (bDel !== aDel) return bDel - aDel;
+          return b.id.localeCompare(a.id);
+        }),
     [items]
   );
 
-  // Dynamic albums with accurate counts
+  // Dynamic albums with accurate counts and zero duplicate content across all albums
   const albums = useMemo(() => {
-    return albumsState.map((album) => {
-      let count = 0;
-      let cover = album.coverUri;
-      if (album.id === 'camera') {
-        const cam = items.filter((i) => !i.isDeleted && i.albumIds.includes('camera'));
-        count = cam.length;
-        if (cam.length > 0) cover = cam[0].uri;
-      } else if (album.id === 'favorites') {
-        count = favorites.length;
-        if (favorites.length > 0) cover = favorites[0].uri;
-      } else if (album.id === 'screenshots') {
-        const screens = items.filter((i) => !i.isDeleted && i.albumIds.includes('screenshots'));
-        count = screens.length;
-        if (screens.length > 0) cover = screens[0].uri;
-      } else if (album.id === 'videos') {
-        const vids = items.filter((i) => !i.isDeleted && i.mediaType === 'video');
-        count = vids.length;
-        if (vids.length > 0) cover = vids[0].uri;
-      } else if (album.id === 'burst') {
-        const bursts = items.filter((i) => !i.isDeleted && i.mediaType === 'burst');
-        count = bursts.length;
-        if (bursts.length > 0) cover = bursts[0].uri;
-      } else {
-        const customItems = items.filter((i) => !i.isDeleted && i.albumIds.includes(album.id));
-        count = customItems.length;
-        if (customItems.length > 0) cover = customItems[0].uri;
-      }
-      return { ...album, itemCount: count, coverUri: cover };
-    });
+    return deduplicateAlbums(albumsState, items, favorites);
   }, [albumsState, items, favorites]);
 
   // Selection handlers
@@ -415,24 +443,38 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
     async (ids: string[]) => {
       triggerHaptic();
 
-      // 1. Physically delete from device storage
-      await deleteAssetsFromDevice(ids);
+      // Find full items if available so we have both id and uri
+      const itemsToDelete = items.filter((item) => ids.includes(item.id));
+      const targets =
+        itemsToDelete.length > 0
+          ? itemsToDelete.map((i) => ({ id: i.id, uri: i.uri }))
+          : ids.map((id) => ({ id }));
 
-      // 2. Remove from trash map and favorites
+      // 1. Physically delete from device storage
+      const success = await deleteAssetsFromDevice(targets);
+      if (!success) {
+        return;
+      }
+
+      // 2. Remove from trash map, favorites, and register permanently deleted
       const updatedTrash = { ...trashMapRef.current };
+      const updatedPermanentlyDeleted = new Set(permanentlyDeletedIdsRef.current);
       ids.forEach((id) => {
         delete updatedTrash[id];
         favoriteIdsRef.current.delete(id);
+        updatedPermanentlyDeleted.add(id);
       });
       trashMapRef.current = updatedTrash;
+      permanentlyDeletedIdsRef.current = updatedPermanentlyDeleted;
       saveTrashMap(updatedTrash);
       saveFavoriteIds(Array.from(favoriteIdsRef.current));
+      savePermanentlyDeletedIds(Array.from(updatedPermanentlyDeleted));
 
       // 3. Remove from state
       setItems((prev) => prev.filter((item) => !ids.includes(item.id)));
       clearSelection();
     },
-    [triggerHaptic, clearSelection]
+    [items, triggerHaptic, clearSelection]
   );
 
   const createAlbum = useCallback((title: string, initialMediaIds: string[] = []): string => {
@@ -530,6 +572,9 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       refreshMedia,
       viewDensity,
       setViewDensity,
+      sortOrder,
+      setSortOrder,
+      toggleSortOrder,
       isSelectionMode,
       selectedIds,
       setIsSelectionMode,
@@ -560,6 +605,8 @@ export function GalleryProvider({ children }: { children: React.ReactNode }) {
       requestPermission,
       refreshMedia,
       viewDensity,
+      sortOrder,
+      toggleSortOrder,
       isSelectionMode,
       selectedIds,
       toggleSelect,

@@ -2,6 +2,8 @@ export type MediaType = 'photo' | 'video' | 'burst' | 'live';
 
 export type ViewDensity = 'day' | 'month' | 'year';
 
+export type SortOrder = 'desc' | 'asc';
+
 export interface LocationInfo {
   city?: string;
   country?: string;

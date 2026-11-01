@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
   CUSTOM_ALBUMS: '@oneplus_gallery_custom_albums', // Album[]
   ALBUM_MEDIA: '@oneplus_gallery_album_media_map', // { [albumId: string]: string[] }
   EDITS: '@oneplus_gallery_edits_map', // { [id: string]: EditAdjustments }
+  PERMANENTLY_DELETED: '@oneplus_gallery_permanently_deleted_ids', // string[]
 };
 
 export async function loadFavoriteIds(): Promise<string[]> {
@@ -108,3 +109,26 @@ export async function saveEditsMap(map: Record<string, EditAdjustments>): Promis
     console.warn('Failed to save edits map:', e);
   }
 }
+
+export async function loadPermanentlyDeletedIds(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEYS.PERMANENTLY_DELETED);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('Failed to load permanently deleted IDs:', e);
+    return [];
+  }
+}
+
+export async function savePermanentlyDeletedIds(ids: string[]): Promise<void> {
+  try {
+    // Keep up to 2000 IDs to avoid unbounded storage growth
+    const capped = ids.slice(-2000);
+    await AsyncStorage.setItem(STORAGE_KEYS.PERMANENTLY_DELETED, JSON.stringify(capped));
+  } catch (e) {
+    console.warn('Failed to save permanently deleted IDs:', e);
+  }
+}
+
