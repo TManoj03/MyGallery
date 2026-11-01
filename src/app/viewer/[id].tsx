@@ -63,6 +63,18 @@ function setPlayerCurrentTime(playerInstance: any, time: number) {
   playerInstance.currentTime = time;
 }
 
+function setPlayerPlaybackRate(playerInstance: any, rate: number) {
+  playerInstance.playbackRate = rate;
+}
+
+function setPlayerLoop(playerInstance: any, loop: boolean) {
+  playerInstance.loop = loop;
+}
+
+function getNow(): number {
+  return Date.now();
+}
+
 interface VideoPlayerItemProps {
   uri: string;
   isActive: boolean;
@@ -71,6 +83,8 @@ interface VideoPlayerItemProps {
   onNext?: () => void;
   onPrevious?: () => void;
 }
+
+const PLAYBACK_SPEEDS = [0.5, 1.0, 1.25, 1.5, 2.0];
 
 function GalleryVideoItem({
   uri,
@@ -81,11 +95,48 @@ function GalleryVideoItem({
   onPrevious,
 }: VideoPlayerItemProps) {
   const insets = useSafeAreaInsets();
+  const videoViewRef = useRef<VideoView>(null);
   const [contentFit, setContentFit] = useState<'contain' | 'cover'>('contain');
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [isLooping, setIsLooping] = useState(true);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [isSpeedBoosted, setIsSpeedBoosted] = useState(false);
   const [progressBarWidth, setProgressBarWidth] = useState(0);
 
+  // Real-time scrubbing state
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubPositionFraction, setScrubPositionFraction] = useState(0);
+
+  // Double-tap visual feedback state (-10s / +10s)
+  const [seekFeedback, setSeekFeedback] = useState<{
+    side: 'left' | 'right';
+    seconds: number;
+  } | null>(null);
+
+  // Speed toast indicator state
+  const [speedNotification, setSpeedNotification] = useState<number | null>(null);
+
+  // Refs for smooth gestures and zero-latency drag tracking
+  const progressBarWidthRef = useRef(0);
+  const durationRef = useRef(0);
+  const isScrubbingRef = useRef(false);
+  const lastSeekTimeRef = useRef(0);
+
+  const lastTapRef = useRef<{ time: number; x: number } | null>(null);
+  const singleTapTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seekFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speedNotificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isHoldingSpeedRef = useRef(false);
+  const speedBeforeBoostRef = useRef(1.0);
+  const isLoopingRef = useRef(true);
+
+  useEffect(() => {
+    isLoopingRef.current = isLooping;
+  }, [isLooping]);
+
   const player = useVideoPlayer(uri, (p) => {
+    p.muted = true;
     p.loop = true;
     p.timeUpdateEventInterval = 0.25;
     if (isActive) {
@@ -93,12 +144,24 @@ function GalleryVideoItem({
     }
   });
 
+  useEffect(() => {
+    setPlayerMuted(player, true);
+  }, [player]);
+
   const [currentTime, setCurrentTime] = useState(0);
 
   const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player.playing });
 
   useEventListener(player, 'timeUpdate', ({ currentTime: newTime }) => {
-    setCurrentTime(newTime);
+    if (!isScrubbingRef.current) {
+      setCurrentTime(newTime);
+    }
+  });
+
+  useEventListener(player, 'playToEnd', () => {
+    if (!isLoopingRef.current) {
+      player.pause();
+    }
   });
 
   useEffect(() => {
@@ -108,6 +171,27 @@ function GalleryVideoItem({
       player.pause();
     }
   }, [isActive, player]);
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (singleTapTimeoutRef.current) {
+        clearTimeout(singleTapTimeoutRef.current);
+      }
+      if (seekFeedbackTimerRef.current) {
+        clearTimeout(seekFeedbackTimerRef.current);
+      }
+      if (speedNotificationTimerRef.current) {
+        clearTimeout(speedNotificationTimerRef.current);
+      }
+    };
+  }, []);
+
+  const duration = Math.max(0, player.duration || 0);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
 
   const handlePlayPause = () => {
     triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
@@ -121,6 +205,32 @@ function GalleryVideoItem({
   const handleSeekBy = (seconds: number) => {
     triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
     player.seekBy(seconds);
+  };
+
+  const handleCycleSpeed = () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    const currentIndex = PLAYBACK_SPEEDS.indexOf(playbackSpeed);
+    const nextIndex = (currentIndex + 1) % PLAYBACK_SPEEDS.length;
+    const nextSpeed = PLAYBACK_SPEEDS[nextIndex];
+    setPlaybackSpeed(nextSpeed);
+    setPlayerPlaybackRate(player, nextSpeed);
+    speedBeforeBoostRef.current = nextSpeed;
+
+    setSpeedNotification(nextSpeed);
+    if (speedNotificationTimerRef.current) {
+      clearTimeout(speedNotificationTimerRef.current);
+    }
+    speedNotificationTimerRef.current = setTimeout(() => {
+      setSpeedNotification(null);
+      speedNotificationTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handleToggleLoop = () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    const next = !isLooping;
+    setIsLooping(next);
+    setPlayerLoop(player, next);
   };
 
   const handleToggleMute = () => {
@@ -139,16 +249,161 @@ function GalleryVideoItem({
     setContentFit((prev) => (prev === 'contain' ? 'cover' : 'contain'));
   };
 
-  const duration = Math.max(0, player.duration || 0);
-  const progressFraction = duration > 0 ? Math.min(1, Math.max(0, currentTime / duration)) : 0;
+  const handleFullscreen = async () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await videoViewRef.current?.enterFullscreen();
+    } catch (err) {
+      console.warn('Fullscreen entry not supported or failed:', err);
+    }
+  };
 
-  const handleScrubberPress = (e: GestureResponderEvent) => {
-    const { locationX } = e.nativeEvent;
-    if (progressBarWidth > 0 && duration > 0) {
-      const frac = Math.max(0, Math.min(1, locationX / progressBarWidth));
-      setPlayerCurrentTime(player, frac * duration);
+  // Double-tap to seek (left -10s, right +10s) with cumulative second count
+  const handleDoubleTapSeek = (delta: number) => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    player.seekBy(delta);
+
+    const side = delta < 0 ? 'left' : 'right';
+    setSeekFeedback((prev) => {
+      const currentSeconds = prev && prev.side === side ? prev.seconds : 0;
+      return {
+        side,
+        seconds: currentSeconds + Math.abs(delta),
+      };
+    });
+
+    if (seekFeedbackTimerRef.current) {
+      clearTimeout(seekFeedbackTimerRef.current);
+    }
+    seekFeedbackTimerRef.current = setTimeout(() => {
+      setSeekFeedback(null);
+      seekFeedbackTimerRef.current = null;
+    }, 750);
+  };
+
+  // Long-press hold for 2.0x playback speed
+  const handleLongPressStart = () => {
+    if (isHoldingSpeedRef.current) return;
+    isHoldingSpeedRef.current = true;
+    speedBeforeBoostRef.current = player.playbackRate || playbackSpeed;
+    setPlayerPlaybackRate(player, 2.0);
+    setIsSpeedBoosted(true);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
+  const handleLongPressEnd = () => {
+    if (!isHoldingSpeedRef.current) return;
+    isHoldingSpeedRef.current = false;
+    setPlayerPlaybackRate(player, speedBeforeBoostRef.current);
+    setIsSpeedBoosted(false);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  // Backdrop touch handler distinguishing single tap (toggle controls) and double-tap (seek)
+  const handleBackdropPress = (e: GestureResponderEvent) => {
+    if (isHoldingSpeedRef.current) {
+      return;
+    }
+
+    const now = getNow();
+    const x = e.nativeEvent.locationX;
+    const isDoubleTap =
+      lastTapRef.current &&
+      now - lastTapRef.current.time < 300 &&
+      Math.abs(x - lastTapRef.current.x) < 80;
+
+    if (isDoubleTap) {
+      if (singleTapTimeoutRef.current) {
+        clearTimeout(singleTapTimeoutRef.current);
+        singleTapTimeoutRef.current = null;
+      }
+      lastTapRef.current = null;
+
+      if (x < SCREEN_WIDTH * 0.42) {
+        handleDoubleTapSeek(-10);
+      } else if (x > SCREEN_WIDTH * 0.58) {
+        handleDoubleTapSeek(10);
+      } else {
+        handlePlayPause();
+      }
+    } else {
+      lastTapRef.current = { time: now, x };
+      if (singleTapTimeoutRef.current) {
+        clearTimeout(singleTapTimeoutRef.current);
+      }
+      singleTapTimeoutRef.current = setTimeout(() => {
+        onToggleControls();
+        singleTapTimeoutRef.current = null;
+      }, 260);
+    }
+  };
+
+  // Interactive scrubber drag handling via PanResponder
+  const handleScrubStart = (locationX: number) => {
+    const width = progressBarWidthRef.current;
+    if (width <= 0 || durationRef.current <= 0) return;
+    isScrubbingRef.current = true;
+    setIsScrubbing(true);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+
+    const frac = Math.max(0, Math.min(1, locationX / width));
+    setScrubPositionFraction(frac);
+    const targetTime = frac * durationRef.current;
+    setPlayerCurrentTime(player, targetTime);
+  };
+
+  const handleScrubMove = (currentX: number) => {
+    const width = progressBarWidthRef.current;
+    if (width <= 0 || durationRef.current <= 0 || !isScrubbingRef.current) return;
+
+    const frac = Math.max(0, Math.min(1, currentX / width));
+    setScrubPositionFraction(frac);
+
+    const now = getNow();
+    if (now - lastSeekTimeRef.current > 50) {
+      lastSeekTimeRef.current = now;
+      const targetTime = frac * durationRef.current;
+      setPlayerCurrentTime(player, targetTime);
+    }
+  };
+
+  const handleScrubEnd = (currentX: number) => {
+    const width = progressBarWidthRef.current;
+    if (width > 0 && durationRef.current > 0 && isScrubbingRef.current) {
+      const frac = Math.max(0, Math.min(1, currentX / width));
+      const targetTime = frac * durationRef.current;
+      setPlayerCurrentTime(player, targetTime);
+      setCurrentTime(targetTime);
       triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
     }
+    isScrubbingRef.current = false;
+    setIsScrubbing(false);
+  };
+
+  const startPageXRef = useRef(0);
+  const startLocationXRef = useRef(0);
+
+  const handleTouchStart = (e: GestureResponderEvent) => {
+    startPageXRef.current = e.nativeEvent.pageX;
+    startLocationXRef.current = e.nativeEvent.locationX;
+    handleScrubStart(e.nativeEvent.locationX);
+  };
+
+  const handleTouchMove = (e: GestureResponderEvent) => {
+    const deltaX = e.nativeEvent.pageX - startPageXRef.current;
+    const currentX = startLocationXRef.current + deltaX;
+    handleScrubMove(currentX);
+  };
+
+  const handleTouchEnd = (e: GestureResponderEvent) => {
+    const deltaX = e.nativeEvent.pageX - startPageXRef.current;
+    const currentX = startLocationXRef.current + deltaX;
+    handleScrubEnd(currentX);
+  };
+
+  const handleTouchCancel = () => {
+    isScrubbingRef.current = false;
+    setIsScrubbing(false);
   };
 
   const handlePreviousPress = () => {
@@ -167,17 +422,60 @@ function GalleryVideoItem({
     }
   };
 
+  const progressFraction = duration > 0 ? Math.min(1, Math.max(0, currentTime / duration)) : 0;
+  const activeFraction = isScrubbing ? scrubPositionFraction : progressFraction;
+  const displayTime = isScrubbing ? activeFraction * duration : currentTime;
+
   return (
     <View style={styles.pageContainer}>
       <VideoView
+        ref={videoViewRef}
         player={player}
         style={styles.mainMedia}
         contentFit={contentFit}
         nativeControls={false}
       />
 
-      {/* Backdrop touch target: clicking anywhere on the video toggles controls */}
-      <Pressable style={StyleSheet.absoluteFill} onPress={onToggleControls} />
+      {/* Backdrop touch target: handles single-tap (toggle chrome), double-tap (-10s / +10s), and press-and-hold (2x speed) */}
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={handleBackdropPress}
+        onLongPress={handleLongPressStart}
+        onPressOut={handleLongPressEnd}
+        delayLongPress={350}
+      />
+
+      {/* Top Floating Speed Indicator (Active on Long-Press or Speed Cycle) */}
+      {(isSpeedBoosted || speedNotification !== null) && (
+        <View style={styles.speedBoostBadge} pointerEvents="none">
+          <Ionicons name="flash" size={14} color="#FFD60A" />
+          <Text style={styles.speedBoostText}>
+            {isSpeedBoosted ? '2.0× Speed' : `${speedNotification}× Speed`}
+          </Text>
+        </View>
+      )}
+
+      {/* Double-Tap Seek Feedback Badges (-10s / +10s) */}
+      {seekFeedback && (
+        <View
+          style={[
+            styles.seekFeedbackOverlay,
+            seekFeedback.side === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight,
+          ]}
+          pointerEvents="none"
+        >
+          <View style={styles.seekFeedbackPill}>
+            <Ionicons
+              name={seekFeedback.side === 'left' ? 'play-back' : 'play-forward'}
+              size={26}
+              color="#FFFFFF"
+            />
+            <Text style={styles.seekFeedbackText}>
+              {seekFeedback.side === 'left' ? `-${seekFeedback.seconds}s` : `+${seekFeedback.seconds}s`}
+            </Text>
+          </View>
+        </View>
+      )}
 
       {/* Controls Overlay displayed when showChrome is true */}
       {showChrome && (
@@ -252,8 +550,9 @@ function GalleryVideoItem({
             ]}
             pointerEvents="auto"
           >
-            {/* Quick Tools Row (Play/Pause, Mute, Replay, Aspect Fit/Cover) */}
+            {/* Quick Tools Row (Play/Pause, Speed, Loop, Mute, Fit, Replay, Fullscreen) - Pure Icons */}
             <View style={styles.videoQuickActionsRow}>
+              {/* Play / Pause */}
               <Pressable
                 onPress={handlePlayPause}
                 style={({ pressed }) => [
@@ -264,15 +563,45 @@ function GalleryVideoItem({
               >
                 <Ionicons
                   name={isPlaying ? 'pause' : 'play'}
-                  size={15}
+                  size={18}
                   color="#FFFFFF"
-                  style={!isPlaying ? { marginLeft: 1 } : undefined}
+                  style={!isPlaying ? { marginLeft: 2 } : undefined}
                 />
-                <Text style={styles.videoPillText}>
-                  {isPlaying ? 'Pause' : 'Play'}
-                </Text>
               </Pressable>
 
+              {/* Playback Speed Cycle */}
+              <Pressable
+                onPress={handleCycleSpeed}
+                style={({ pressed }) => [
+                  styles.videoPillButton,
+                  playbackSpeed !== 1.0 && styles.videoPillButtonActiveSpeed,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons
+                  name="speedometer-outline"
+                  size={18}
+                  color={playbackSpeed !== 1.0 ? '#FFD60A' : '#FFFFFF'}
+                />
+              </Pressable>
+
+              {/* Loop / Play Once Toggle */}
+              <Pressable
+                onPress={handleToggleLoop}
+                style={({ pressed }) => [
+                  styles.videoPillButton,
+                  isLooping && styles.videoPillButtonActiveLoop,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons
+                  name={isLooping ? 'repeat' : 'arrow-forward'}
+                  size={18}
+                  color={isLooping ? '#0084FF' : '#FFFFFF'}
+                />
+              </Pressable>
+
+              {/* Mute / Unmute */}
               <Pressable
                 onPress={handleToggleMute}
                 style={({ pressed }) => [
@@ -283,61 +612,96 @@ function GalleryVideoItem({
               >
                 <Ionicons
                   name={isMuted ? 'volume-mute' : 'volume-high'}
-                  size={15}
+                  size={18}
                   color={isMuted ? '#FF453A' : '#FFFFFF'}
                 />
-                <Text style={[styles.videoPillText, isMuted && { color: '#FF453A' }]}>
-                  {isMuted ? 'Unmute' : 'Mute'}
-                </Text>
               </Pressable>
 
-              <Pressable
-                onPress={handleReplay}
-                style={({ pressed }) => [styles.videoPillButton, pressed && styles.pressed]}
-              >
-                <Ionicons name="refresh" size={14} color="#FFFFFF" />
-                <Text style={styles.videoPillText}>Replay</Text>
-              </Pressable>
-
+              {/* Screen Fit (Contain / Cover) */}
               <Pressable
                 onPress={handleToggleFit}
                 style={({ pressed }) => [styles.videoPillButton, pressed && styles.pressed]}
               >
                 <Ionicons
                   name={contentFit === 'cover' ? 'contract-outline' : 'scan-outline'}
-                  size={14}
+                  size={18}
                   color="#FFFFFF"
                 />
-                <Text style={styles.videoPillText}>
-                  {contentFit === 'cover' ? 'Fit Screen' : 'Fill Screen'}
-                </Text>
+              </Pressable>
+
+              {/* Replay */}
+              <Pressable
+                onPress={handleReplay}
+                style={({ pressed }) => [styles.videoPillButton, pressed && styles.pressed]}
+              >
+                <Ionicons name="refresh" size={18} color="#FFFFFF" />
+              </Pressable>
+
+              {/* Native Fullscreen */}
+              <Pressable
+                onPress={handleFullscreen}
+                style={({ pressed }) => [styles.videoPillButton, pressed && styles.pressed]}
+              >
+                <Ionicons name="expand" size={18} color="#FFFFFF" />
               </Pressable>
             </View>
 
-            {/* Video Scrubber & Time Bar */}
+            {/* Video Scrubber & Interactive Drag Timeline */}
             <View style={styles.videoScrubberRow}>
-              <Text style={styles.timecodeText}>{formatTime(currentTime)}</Text>
+              <Text style={styles.timecodeText}>{formatTime(displayTime)}</Text>
 
-              <Pressable
+              <View
                 style={styles.progressBarWrapper}
-                onPress={handleScrubberPress}
-                onLayout={(e) => setProgressBarWidth(e.nativeEvent.layout.width)}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onTouchCancel={handleTouchCancel}
+                onLayout={(e) => {
+                  const width = e.nativeEvent.layout.width;
+                  setProgressBarWidth(width);
+                  progressBarWidthRef.current = width;
+                }}
               >
-                <View style={styles.progressBarTrack}>
+                {/* Floating Preview Timecode Bubble above thumb during dragging */}
+                {isScrubbing && progressBarWidth > 0 && (
+                  <View
+                    style={[
+                      styles.scrubberPreviewBubble,
+                      {
+                        left: `${activeFraction * 100}%`,
+                      },
+                    ]}
+                    pointerEvents="none"
+                  >
+                    <Text style={styles.scrubberPreviewText}>
+                      {formatTime(displayTime)}
+                    </Text>
+                    <View style={styles.scrubberPreviewArrow} />
+                  </View>
+                )}
+
+                <View
+                  style={[
+                    styles.progressBarTrack,
+                    isScrubbing && styles.progressBarTrackActive,
+                  ]}
+                >
                   <View
                     style={[
                       styles.progressBarFill,
-                      { width: `${progressFraction * 100}%` },
+                      { width: `${activeFraction * 100}%` },
+                      isScrubbing && styles.progressBarFillActive,
                     ]}
                   />
                   <View
                     style={[
                       styles.progressBarThumb,
-                      { left: `${progressFraction * 100}%` },
+                      { left: `${activeFraction * 100}%` },
+                      isScrubbing && styles.progressBarThumbScrubbing,
                     ]}
                   />
                 </View>
-              </Pressable>
+              </View>
 
               <Text style={styles.timecodeText}>{formatTime(duration)}</Text>
             </View>
@@ -1038,20 +1402,33 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: 4,
   },
-  videoPillButton: {
+  videoQuickActionsScroll: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    gap: 8,
+    paddingRight: 24,
+  },
+  videoPillButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   videoPillButtonActive: {
     backgroundColor: 'rgba(255, 69, 58, 0.18)',
     borderColor: 'rgba(255, 69, 58, 0.4)',
+  },
+  videoPillButtonActiveSpeed: {
+    backgroundColor: 'rgba(255, 214, 10, 0.18)',
+    borderColor: 'rgba(255, 214, 10, 0.45)',
+  },
+  videoPillButtonActiveLoop: {
+    backgroundColor: 'rgba(0, 132, 255, 0.18)',
+    borderColor: 'rgba(0, 132, 255, 0.45)',
   },
   videoPillText: {
     color: '#FFFFFF',
@@ -1123,6 +1500,60 @@ const styles = StyleSheet.create({
   disabledButton: {
     opacity: 0.35,
   },
+  speedBoostBadge: {
+    position: 'absolute',
+    top: 54,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.78)',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 214, 10, 0.5)',
+    shadowColor: '#FFD60A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 40,
+  },
+  speedBoostText: {
+    color: '#FFD60A',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  seekFeedbackOverlay: {
+    position: 'absolute',
+    top: '42%',
+    zIndex: 25,
+  },
+  seekFeedbackLeft: {
+    left: 40,
+  },
+  seekFeedbackRight: {
+    right: 40,
+  },
+  seekFeedbackPill: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    gap: 4,
+    minWidth: 70,
+  },
+  seekFeedbackText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
   videoScrubberRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1141,6 +1572,42 @@ const styles = StyleSheet.create({
     height: 30,
     justifyContent: 'center',
   },
+  scrubberPreviewBubble: {
+    position: 'absolute',
+    bottom: 24,
+    marginLeft: -26,
+    backgroundColor: 'rgba(18, 18, 18, 0.95)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  scrubberPreviewText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  scrubberPreviewArrow: {
+    position: 'absolute',
+    bottom: -4,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderTopWidth: 4,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: 'rgba(18, 18, 18, 0.95)',
+  },
   progressBarTrack: {
     height: 6,
     borderRadius: 3,
@@ -1149,10 +1616,18 @@ const styles = StyleSheet.create({
     overflow: 'visible',
     justifyContent: 'center',
   },
+  progressBarTrackActive: {
+    height: 8,
+    borderRadius: 4,
+  },
   progressBarFill: {
     height: 6,
     borderRadius: 3,
     backgroundColor: '#EB0029',
+  },
+  progressBarFillActive: {
+    height: 8,
+    borderRadius: 4,
   },
   progressBarThumb: {
     position: 'absolute',
@@ -1166,6 +1641,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 3,
     elevation: 4,
+  },
+  progressBarThumbScrubbing: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginLeft: -10,
+    borderWidth: 2,
+    borderColor: '#EB0029',
+    backgroundColor: '#FFFFFF',
+    shadowOpacity: 0.8,
+    shadowRadius: 5,
+    elevation: 8,
   },
   topBar: {
     position: 'absolute',
